@@ -1,0 +1,17 @@
+setup.py
+app/__init__.py
+app/config.py
+app/main.py
+app/services/__init__.py
+app/services/extract_locations.py
+app/services/gettingloc.py
+app/services/response_service.py
+backend_prototype.egg-info/PKG-INFO
+backend_prototype.egg-info/SOURCES.txt
+backend_prototype.egg-info/dependency_links.txt
+backend_prototype.egg-info/top_level.txt
+ml_models/__init__.py
+ml_models/ai_logic.py
+ml_models/assist_clarity_ai.py
+ml_models/model.py
+ml_models/regionCatgeory.py
