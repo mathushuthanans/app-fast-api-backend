@@ -1,5 +1,7 @@
 from fastapi import FastAPI, Query
 from ai_logic import ask_groq
+from app.services import response_service
+rs = response_service.response_service
 
 
 app = FastAPI()
@@ -96,6 +98,55 @@ Give health risk summary per group in this JSON:
   "adults": "...",
   "elderly": "..."
 }}
+"""
+    return ask_groq(prompt)
+
+@app.get("/get_scenario_presets")
+async def get_scenario_presets():
+    """Returns predefined what-if scenarios using existing methods"""
+    # Get current baseline data using your methods
+    current_location = rs.get_location()
+    current_density = get_vehicle_density()
+    current_industry = get_industrial_impact()
+    
+    prompt = f"""
+You are Clarity, analyzing pollution scenarios for Nagpur's St. Vincent Pallotti College.
+Current baseline data:
+- Pollution: {current_location['data']['pollution']}
+- Vehicle density: {current_density}
+- Industrial impact: {current_industry}
+
+Generate 3 what-if scenarios in this exact JSON format:
+{{
+  "scenarios": [
+    {{
+      "id": "scenario1",
+      "name": "Scenario Name",
+      "description": "1-sentence description",
+      "vehicle_changes": {{
+        "cars_per_km": {{"current": X, "projected": Y}},
+        "bikes_per_km": {{"current": X, "projected": Y}},
+        "commercial_vehicles": {{"current": X, "projected": Y}}
+      }},
+      "industrial_changes": {{
+        "Hingna_MIDC": {{"current_impact": X, "projected_impact": Y}},
+        "Butibori": {{"current_impact": X, "projected_impact": Y}}
+      }},
+      "pollution_projections": {{
+        "pm25": {{"current": X, "projected": Y}},
+        "no2": {{"current": X, "projected": Y}},
+        "co": {{"current": X, "projected": Y}}
+      }},
+      "health_benefits": ["Benefit 1", "Benefit 2"]
+    }}
+  ]
+}}
+
+Use these current values from the baseline data:
+- Current PM2.5: {current_location['data']['pollution']['pm25']}
+- Current NO2: {current_location['data']['pollution']['no2']}
+- Current vehicle density: {current_density['density']['total_per_km']}/km
+- Current industrial impact: {current_industry['composite_impact']}
 """
     return ask_groq(prompt)
 

@@ -12,15 +12,9 @@ from app.services.response_service import response_service
 
 app = FastAPI()
 # Explicitly allow the origin where your HTML is served
-origins = [
-    "http://127.0.0.1:8001",
-    "http://localhost:8001", # Good to include localhost as well
-    # If you deploy this later, add your production URL here
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins, # Use the explicit list
+    allow_origins=["*"],  # or specify frontend URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -29,11 +23,25 @@ router = APIRouter()
 
 
 
-# === ML Service Routes ===
+# === Dashboard Routes ===
+
+# Done
+@router.get('/get_trends')
+def get_trends(range: str = "weekly"):  # Default to weekly if not specified
+    return response_service.get_trends(range)
+
 
 @router.get("/get_location")
 def get_location():
     return response_service.get_location()
+
+@router.get("/get_scenario_presets")
+def get_scenario_presets():
+    return response_service.get_scenario_presets()
+
+
+
+# === ML Service Routes ===
 
 @router.post("/predict_health_risk")
 def predict_health_risk(data: HealthRiskRequest):
@@ -111,8 +119,4 @@ def myth_buster(claim: str):
 @router.post("/reduce_pollution_plan")
 def reduce_pollution_plan(request: ReducePollutionPlanRequest):
     return response_service.reduce_pollution_plan(request.goal, request.location)
-
-
-app.include_router(router)
-
 
