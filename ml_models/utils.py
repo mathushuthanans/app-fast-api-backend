@@ -34,11 +34,17 @@ def calculate_o3_aqi(o3):
     return None
 
 def calculate_overall_aqi(pm25, pm10, no2, co, o3):
-    aqi_list = [
-        calculate_pm25_aqi(pm25),
-        calculate_pm10_aqi(pm10),
-        calculate_no2_aqi(no2),
-        calculate_co_aqi(co),
-        calculate_o3_aqi(o3)
-    ]
-    return max(filter(None, aqi_list))
+    aqi_list = []
+
+    if pm25 is not None:
+        aqi_list.append(calculate_pm25_aqi(pm25))
+    if pm10 is not None:
+        aqi_list.append(calculate_pm10_aqi(pm10))
+    if no2 is not None:
+        aqi_list.append(calculate_no2_aqi(no2))
+    if co is not None:
+        aqi_list.append(calculate_co_aqi(co))
+    if o3 is not None:
+        aqi_list.append(calculate_o3_aqi(o3))
+
+    return max(filter(None, aqi_list)) if aqi_list else None
