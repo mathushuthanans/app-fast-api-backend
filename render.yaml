@@ -8,7 +8,7 @@ services:
     - key: ENV
       value: production
     - key: API_URL_WAQI
-      value: https://api.waqi.info/feed/here/?token=95436f0dbd6f640af4ac23fc61c4352e6af45f8e
+      value: https://api.waqi.info/feed/geo:21.1199;79.0196/?token=95436f0dbd6f640af4ac23fc61c4352e6af45f8e
     - key: API_KEY_GROQ
       value: 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
     - key: BASE_URL_GROQ

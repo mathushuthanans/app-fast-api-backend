@@ -38,7 +38,6 @@ class ResponseService:
         self._current_data = None
         self._last_forecast = None
 
-# get_trends 
     def get_trends(self, range: str):
         """Returns pollution trends for the requested time range"""
         range = range.lower()

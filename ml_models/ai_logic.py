@@ -1,9 +1,9 @@
 from openai import OpenAI
 import json
-from app.config import api_key, base_url
+from app.config import API_KEY_GROQ, BASE_URL_GROQ
 
 
-client = OpenAI(api_key=api_key, base_url=base_url)
+client = OpenAI(api_key=API_KEY_GROQ, base_url=BASE_URL_GROQ)
 
 def ask_groq(prompt: str) -> dict:
     response = client.chat.completions.create(
