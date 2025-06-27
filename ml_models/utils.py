@@ -39,7 +39,7 @@ def calculate_pm10_aqi(pm10):
 
 
 def calculate_no2_aqi(no2):
-    if no2 is None:
+    if not isinstance(no2, (int, float)) or no2 is None:
         return None
     try:
         bps = [
