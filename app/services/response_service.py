@@ -243,7 +243,7 @@ class ResponseService:
             calculate_overall_aqi
         )
         
-        aqi = calculate_overall_aqi(pm25, pm10, no2, co, o3)  # Exclude CO if not needed
+        aqi = calculate_overall_aqi(pm25, pm10, no2, co, o3) 
         
         # Get weather description (simple mapping)
         weather_desc = "Partly Cloudy"  # Default, replace with real data if available
