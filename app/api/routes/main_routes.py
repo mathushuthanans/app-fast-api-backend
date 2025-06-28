@@ -125,5 +125,5 @@ def get_health_impact():
 
 @router.get("/asking")
 def ask(prompt):
-    response_service.groq_reply(prompt)
+    return response_service.groq_reply(prompt)
 

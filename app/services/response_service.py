@@ -295,7 +295,7 @@ class ResponseService:
 
 
 
-    def groq_reply(self, scenario_text: str):
+    def groq_reply(self, scenario_text):
         api_key = os.getenv("GEN_AI")
         if not api_key:
             raise ValueError("GEN_AI environment variable is not set")
