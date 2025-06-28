@@ -38,64 +38,99 @@ class ResponseService:
         self._current_data = None
         self._last_forecast = None
 
-    def get_trends(self, range: str):
+    def get_trends(self, range: str = "weekly"):
         """Returns pollution trends for the requested time range"""
         range = range.lower()
-        if range not in ["weekly", "monthly", "yearly"]:
-            return {"error": "Invalid range. Use 'weekly', 'monthly', or 'yearly'"}
+        valid_ranges = ["weekly", "monthly", "yearly"]
+        
+        if range not in valid_ranges:
+            return {
+                "status": "error",
+                "message": f"Invalid range. Use one of: {', '.join(valid_ranges)}"
+            }
 
-        # First ensure we have fresh data
-        self.get_location()  # This populates self._last_forecast
+        try:
+            # First ensure we have fresh data
+            location_response = self.get_location()
+            if 'error' in location_response:
+                return location_response
+                
+            if not hasattr(self, '_last_forecast') or not self._last_forecast:
+                return {
+                    "status": "error",
+                    "message": "Forecast data not available"
+                }
 
-        if range == "week":
-            return self._get_weekly_data()
-        elif range == "month":
-            return self._get_monthly_data()
-        else:
-            return self._get_yearly_data()
+            # Validate forecast data structure
+            if not isinstance(self._last_forecast, dict) or 'pm25' not in self._last_forecast:
+                return {
+                    "status": "error", 
+                    "message": "Invalid forecast data structure"
+                }
+
+            if range == "weekly":
+                return self._get_weekly_data()
+            elif range == "monthly":
+                return self._get_monthly_data()
+            else:  # yearly
+                return self._get_yearly_data()
+                
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": f"Failed to generate trends: {str(e)}"
+            }
 
     def _get_weekly_data(self):
-        """Returns 7 days of PM2.5/PM10 data with current day's full pollutants"""
-        if not self._last_forecast:
-            return {"error": "No forecast data available"}
-
+        """Returns consistent weekly data structure"""
         weekly_data = []
+        
+        try:
+            # 1. Add current day's complete data first (if available)
+            if self._current_data and isinstance(self._current_data, dict):
+                current = self._current_data.get('data', {}).get('iaqi', {})
+                if current:
+                    weekly_data.append({
+                        "date": datetime.now().strftime("%Y-%m-%d"),
+                        "pm2_5": current.get('pm25', {}).get('v'),
+                        "pm10": current.get('pm10', {}).get('v'),
+                        "no2": current.get('no2', {}).get('v'),
+                        "co": current.get('co', {}).get('v'),
+                        "o3": current.get('o3', {}).get('v')
+                    })
 
-        # 1. Add forecast data (PM2.5 and PM10 only)
-        for i in range(min(7, len(self._last_forecast.get('pm25', [])))):
-            day_data = {
-                "date": self._last_forecast['pm25'][i]['day'],
-                "pm2_5": self._last_forecast['pm25'][i]['avg'],
-                "pm10": self._last_forecast['pm10'][i]['avg'] if i < len(self._last_forecast.get('pm10', [])) else None,
-                "co": None,
-                "no2": None,
-                "o3": None
+            # 2. Add forecast data for remaining days
+            forecast_days = min(7 - len(weekly_data), len(self._last_forecast.get('pm25', [])))
+            
+            for i in range(forecast_days):
+                day_data = {
+                    "date": self._last_forecast['pm25'][i]['day'],
+                    "pm2_5": self._last_forecast['pm25'][i]['avg'],
+                    "pm10": self._last_forecast['pm10'][i]['avg'] if i < len(self._last_forecast.get('pm10', [])) else None,
+                    "no2": None,
+                    "co": None,
+                    "o3": None
+                }
+                weekly_data.append(day_data)
+
+            return {
+                "status": "success",
+                "range": "weekly",
+                "data": weekly_data,
+                "units": {
+                    "pm2_5": "µg/m³",
+                    "pm10": "µg/m³",
+                    "no2": "ppb",
+                    "co": "ppm", 
+                    "o3": "ppb"
+                }
             }
-            weekly_data.append(day_data)
-
-        # 2. Add current day's complete data if available
-        if self._current_data and 'iaqi' in self._current_data.get('data', {}):
-            current = self._current_data['data']['iaqi']
-            weekly_data.append({
-                "date": datetime.now().strftime("%Y-%m-%d"),
-                "pm2_5": current.get('pm25', {}).get('v'),
-                "pm10": current.get('pm10', {}).get('v'),
-                "co": current.get('co', {}).get('v'),
-                "no2": current.get('no2', {}).get('v'),
-                "o3": current.get('o3', {}).get('v')
-            })
-
-        return {
-            "range": "weekly",
-            "data": weekly_data,
-            "units": {
-                "pm2_5": "µg/m³",
-                "pm10": "µg/m³",
-                "co": "ppm",
-                "no2": "ppb",
-                "o3": "ppb"
+            
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": f"Failed to generate weekly data: {str(e)}"
             }
-        }
 
     def _get_monthly_data(self):
         """Returns 6-12 months of historical PM2.5/PM10 data with realistic patterns"""
