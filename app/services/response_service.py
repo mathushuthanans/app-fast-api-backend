@@ -530,56 +530,52 @@ class ResponseService:
             return {"error": f"Failed to build scenario prompt: {str(e)}"}
 
 
-    def citizen_scenario_actions(self, scenario: dict):
-        """
-        Builds a 'what if' negative scenario prompt using passed scenario,
-        returns categorized actions: do, dont, minimize.
-        """
-        import json
+    def get_citizen_actions(self):
+        """Get pollution data and provide direct action recommendations"""
+        location_data = self.get_location()
 
-        scenario_name = scenario.get("name", "Projected Scenario")
-        location = scenario.get("location", {}).get("city", "Urban Region")
-        pretty_scenario = json.dumps(scenario, indent=2)
+        if location_data.get("status") != "success":
+            return {"error": "Failed to fetch current location data"}
 
-        prompt = f"""
-    You are Clarity, an AI assistant for pollution risk awareness and behavioral advice.
+        try:
+            loc_info = location_data["data"]["location"]
+            pollution = location_data["data"]["pollution"]
 
-    The following is a projected negative pollution scenario:
-    - Name: "{scenario_name}"
-    - Location: {location}
-    - Context includes: pollution levels, vehicle density, industrial impact.
+            location = loc_info["city"]
+            aqi = pollution["aqi"]
+            pm25 = pollution["pm25"]
+            pm10 = pollution["pm10"]
+            no2 = pollution["no2"]
+            co = pollution["co"]
+            o3 = pollution["o3"]
 
-    Scenario JSON:
-    ```json
-    {pretty_scenario}
-    ⚠️ Assume this projection becomes reality with no intervention.
+            prompt = f"""
+    You are Clarity, an AI assistant for pollution risk awareness.
 
-    🔻 Expected consequences:
+    📍 Current Location: {location}  
+    📊 Current Air Quality Index: {aqi}  
+    🌫 Current pollutant levels:
+    - PM2.5: {pm25} µg/m³
+    - PM10: {pm10} µg/m³
+    - NO2: {no2} ppb
+    - CO: {co} ppb
+    - O3: {o3} µg/m³
 
-    Major rise in pollutants (PM2.5, NO2, CO, etc.)
-
-    Higher rates of respiratory illness, asthma, heart disease
-
-    Vulnerable groups affected: children, elderly, outdoor workers
-
-    Exposure due to traffic, industrial zones, and indoor air degradation
-
-    🎯 Task:
-    Based on this future context, suggest clear behavioral guidance for citizens.
+    Based on these current pollution levels, provide direct behavioral guidance for citizens.
 
     Structure your output as:
     {{
-    "do": ["Must do actions to protect health and reduce exposure"],
-    "dont": ["Behaviors to completely avoid"],
-    "minimize": ["Habits to reduce to lower impact"]
+        "do": ["Essential protective actions"],
+        "dont": ["Behaviors to avoid"],
+        "minimize": ["Habits to reduce"]
     }}
 
-    Respond ONLY with that JSON structure. No explanation.
+    Respond ONLY with that JSON structure.
     """
+            return ask_groq(prompt)
 
-        return ask_groq(prompt)
-
-
+        except Exception as e:
+            return {"error": f"Failed to process data: {str(e)}"}
 
     def help_info(self):
         message = """
