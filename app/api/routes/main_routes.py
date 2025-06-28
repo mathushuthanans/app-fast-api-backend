@@ -122,3 +122,7 @@ def reduce_pollution_plan(request: ReducePollutionPlanRequest):
 def get_health_impact():
     return response_service.get_health_impact()
 
+@router.get("/ask_clarity")
+def ask_clarity(str):
+    response_service.askanything(str)
+

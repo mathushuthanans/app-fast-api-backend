@@ -291,6 +291,9 @@ class ResponseService:
             }
         }
 
+    def askanything(self, str):
+        return ask_groq(str)
+    
     def _calculate_aqi(self, pm25, pm10, no2, co, o3):
         """Calculate overall AQI from pollutant values"""
         # Simplified AQI calculation - replace with your actual formula
