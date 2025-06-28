@@ -291,8 +291,16 @@ class ResponseService:
             }
         }
 
-    def askanything(self, str):
-        return ask_groq(str)
+    def askanything(self, prompt: str) -> str:
+        """
+        General purpose method to ask anything to the AI assistant.
+        Args:
+            prompt: The input question/prompt from the user
+        Returns:
+            The AI's response as a plain string.
+        """
+        return ask_groq(prompt)
+
     
     def _calculate_aqi(self, pm25, pm10, no2, co, o3):
         """Calculate overall AQI from pollutant values"""
