@@ -291,7 +291,7 @@ class ResponseService:
             }
         }
 
-    def ask_anything(self, prompt):
+    def gemini_replay(self, prompt):
         api_key = os.getenv("GEN_AI")  # Make sure your env variable is named exactly 'GEN_AI'
         url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent"
         

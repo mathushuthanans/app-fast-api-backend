@@ -123,7 +123,7 @@ def reduce_pollution_plan(request: ReducePollutionPlanRequest):
 def get_health_impact():
     return response_service.get_health_impact()
 
-@router.get("/ask_clarity")
+@router.get("/asking")
 def ask(prompt):
-    response_service.ask_anything(prompt)
+    response_service.gemini_replay(prompt)
 
