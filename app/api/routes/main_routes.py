@@ -123,7 +123,7 @@ def reduce_pollution_plan(request: ReducePollutionPlanRequest):
 def get_health_impact():
     return response_service.get_health_impact()
 
-@router.get("/asking")
+@router.post("/asking")
 def ask(prompt):
     return response_service.groq_reply(prompt)
 
