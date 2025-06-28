@@ -291,15 +291,35 @@ class ResponseService:
             }
         }
 
-    def askanything(self, prompt: str) -> str:
-        """
-        General purpose method to ask anything to the AI assistant.
-        Args:
-            prompt: The input question/prompt from the user
-        Returns:
-            The AI's response as a plain string.
-        """
-        return ask_groq(prompt)
+    def ask_anything(self, prompt):
+        api_key = os.getenv("GEN_AI")  # Make sure your env variable is named exactly 'GEN_AI'
+        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent"
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+
+        data = {
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": prompt
+                        }
+                    ]
+                }
+            ]
+        }
+
+        response = requests.post(url, headers=headers, json=data)
+        
+        if response.status_code == 200:
+            response_json = response.json()
+            # Extract the generated text
+            return response_json["candidates"][0]["content"]["parts"][0]["text"]
+        else:
+            raise Exception(f"Error {response.status_code}: {response.text}")
 
     
     def _calculate_aqi(self, pm25, pm10, no2, co, o3):

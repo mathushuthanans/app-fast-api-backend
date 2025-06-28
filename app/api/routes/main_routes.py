@@ -125,5 +125,5 @@ def get_health_impact():
 
 @router.get("/ask_clarity")
 def ask(prompt):
-    return ask_groq(prompt)
+    response_service.ask_anything(prompt)
 
