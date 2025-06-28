@@ -54,3 +54,10 @@ class MythBusterRequest(BaseModel):
 class ReducePollutionPlanRequest(BaseModel):
     goal: str
     location: str
+
+class HealthImpactResponse(BaseModel):
+    risk_level: str
+    risk_description: str
+    sensitive_groups: str
+    exposure_duration: str
+    recommended_actions: str

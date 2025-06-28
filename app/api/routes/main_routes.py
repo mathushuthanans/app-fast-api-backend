@@ -120,3 +120,7 @@ def myth_buster(claim: str):
 def reduce_pollution_plan(request: ReducePollutionPlanRequest):
     return response_service.reduce_pollution_plan(request.goal, request.location)
 
+@router.get("/health_impact")
+def get_health_impact():
+    return response_service.get_health_impact()
+

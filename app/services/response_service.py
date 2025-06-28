@@ -473,59 +473,111 @@ class ResponseService:
         }
 
     def get_scenario_presets(self):
-        """Returns predefined what-if scenarios using existing methods"""
+        """Auto-fetch pollution data and generate negative scenarios"""
+        location_data = self.get_location()
 
-        current_location = self.get_location()
-        current_density = self.get_vehicle_density()
-        current_industry = self.get_industrial_impact()
+        if location_data.get("status") != "success":
+            return {"error": "Failed to fetch current location data"}
+
+        try:
+            loc_info = location_data["data"]["location"]
+            pollution = location_data["data"]["pollution"]
+
+            location = loc_info["city"]
+            aqi = pollution["aqi"]
+            pm25 = pollution["pm25"]
+            pm10 = pollution["pm10"]
+            no2 = pollution["no2"]
+            co = pollution["co"]
+            o3 = pollution["o3"]
+
+            prompt = f"""
+        You are Clarity, an AI that simulates future environmental risks.
+
+        📍 Region: {location}  
+        📊 AQI: {aqi}  
+        🌫 Current pollutant levels:
+        - PM2.5: {pm25} µg/m³
+        - PM10: {pm10} µg/m³
+        - NO2: {no2} ppb
+        - CO: {co} ppb
+        - O3: {o3} µg/m³
+
+        🚧 Static emission sources to consider in this region {location}. search about the below to provide the right scenerio
+        - Dense traffic (fossil-fueled vehicles)
+        - Nearby industries (manufacturing zones)
+        - Fossil-based electricity consumption
+
+        ⚠️ Task:
+        Generate 3 possible **negative future scenarios** assuming **no action is taken**.  
+        Each scenario should show how pollution may worsen due to current sources.
+
+        📝 Format each scenario with:
+        - `id`: unique id like "scenario1"
+        - `name`: short scenario title
+        - `description`: what caused this scenario
+        - `top_pollutant_risks`: array of 1–3 pollutant entries, each like:  
+        {{ "pollutant": "PM2.5", "increase_percent": 28 }}
+        - `main_sources`: 2–3 major contributors (like "diesel vehicles", "power plants")
+        - `health_risks`: 2–3 expected human health issues (like "lung cancer", "asthma")
+        - `aqi_label`: forecast AQI level name (e.g., "Unhealthy", "Hazardous")
+
+        Return ONLY the JSON array of 3 scenarios.
+        """
+            return ask_groq(prompt)
+
+        except Exception as e:
+            return {"error": f"Failed to build scenario prompt: {str(e)}"}
+
+
+    def citizen_scenario_actions(self, scenario: dict):
+        """
+        Builds a 'what if' negative scenario prompt using passed scenario,
+        returns categorized actions: do, dont, minimize.
+        """
+        import json
+
+        scenario_name = scenario.get("name", "Projected Scenario")
+        location = scenario.get("location", {}).get("city", "Urban Region")
+        pretty_scenario = json.dumps(scenario, indent=2)
 
         prompt = f"""
-    You are Clarity, analyzing pollution scenarios for Nagpur's St. Vincent Pallotti College.
+    You are Clarity, an AI assistant for pollution risk awareness and behavioral advice.
 
-    Current baseline data:
-    - Pollution: {current_location['data']['pollution']}
-    - Vehicle density: {current_density}
-    - Industrial impact: {current_industry}
+    The following is a projected negative pollution scenario:
+    - Name: "{scenario_name}"
+    - Location: {location}
+    - Context includes: pollution levels, vehicle density, industrial impact.
 
-    Generate 3 what-if scenarios in **valid JSON only** — do not include Markdown, explanations, or formatting.
+    Scenario JSON:
+    ```json
+    {pretty_scenario}
+    ⚠️ Assume this projection becomes reality with no intervention.
 
-    Return JSON in this exact structure:
+    🔻 Expected consequences:
+
+    Major rise in pollutants (PM2.5, NO2, CO, etc.)
+
+    Higher rates of respiratory illness, asthma, heart disease
+
+    Vulnerable groups affected: children, elderly, outdoor workers
+
+    Exposure due to traffic, industrial zones, and indoor air degradation
+
+    🎯 Task:
+    Based on this future context, suggest clear behavioral guidance for citizens.
+
+    Structure your output as:
     {{
-    "scenarios": [
-        {{
-        "id": "scenario1",
-        "name": "Scenario Name",
-        "description": "1-sentence description",
-        "vehicle_changes": {{
-            "cars_per_km": {{"current": X, "projected": Y}},
-            "bikes_per_km": {{"current": X, "projected": Y}},
-            "commercial_vehicles": {{"current": X, "projected": Y}}
-        }},
-        "industrial_changes": {{
-            "Hingna_MIDC": {{"current_impact": X, "projected_impact": Y}},
-            "Butibori": {{"current_impact": X, "projected_impact": Y}}
-        }},
-        "pollution_projections": {{
-            "pm25": {{"current": X, "projected": Y}},
-            "no2": {{"current": X, "projected": Y}},
-            "co": {{"current": X, "projected": Y}}
-        }},
-        "health_benefits": ["Benefit 1", "Benefit 2"]
-        }}
-    ]
+    "do": ["Must do actions to protect health and reduce exposure"],
+    "dont": ["Behaviors to completely avoid"],
+    "minimize": ["Habits to reduce to lower impact"]
     }}
 
-    Use this baseline:
-    - Current PM2.5: {current_location['data']['pollution']['pm25']}
-    - Current NO2: {current_location['data']['pollution']['no2']}
-    - Current vehicle density: {current_density['density']['total_per_km']}
-    - Current industrial impact: {current_industry['composite_impact']}
-
-    ONLY return the valid JSON object. No ``` marks. No explanation. No intro or outro.
+    Respond ONLY with that JSON structure. No explanation.
     """
 
         return ask_groq(prompt)
-
 
 
 
@@ -699,6 +751,108 @@ class ResponseService:
     }}
     """
         return ask_groq(prompt)
+    
+    def get_health_impact(self):
+        """Analyze health impact based on current pollution data"""
+        try:
+            # Get current pollution data
+            location_data = self.get_location()
+            if not location_data or 'error' in location_data:
+                return {
+                    "error": "Failed to fetch pollution data",
+                    "details": location_data.get('error', 'Unknown error')
+                }
+            
+            # Check if data structure is valid
+            if 'data' not in location_data or 'pollution' not in location_data['data']:
+                return {"error": "Invalid data structure from API"}
+            
+            # Extract pollutant values
+            pollution = location_data['data']['pollution']
+            pm25 = pollution.get('pm25')
+            pm10 = pollution.get('pm10')
+            no2 = pollution.get('no2')
+            co = pollution.get('co')
+            o3 = pollution.get('o3')
+            
+            # Validate values
+            if None in [pm25, pm10, no2, co, o3]:
+                missing = [k for k, v in {
+                    'pm25': pm25,
+                    'pm10': pm10,
+                    'no2': no2,
+                    'co': co,
+                    'o3': o3
+                }.items() if v is None]
+                return {
+                    "error": "Missing pollution data",
+                    "missing_values": missing
+                }
+            
+            # Calculate AQI
+            aqi = self._calculate_aqi(pm25, pm10, no2, co, o3)
+            if aqi is None:
+                return {"error": "Failed to calculate AQI"}
+            
+            aqi_status = self._get_aqi_status(aqi)
+            
+            # Prepare health impact analysis
+            result = {
+                "risk_level": self._get_risk_level(aqi),
+                "risk_description": self._get_risk_description(aqi),
+                "sensitive_groups": self._get_sensitive_groups(),
+                "exposure_duration": self._get_exposure_duration(aqi),
+                "recommended_actions": self._get_recommended_actions(aqi),
+                "pollution_levels": {
+                    "pm25": pm25,
+                    "pm10": pm10,
+                    "no2": no2,
+                    "co": co,
+                    "o3": o3,
+                    "aqi": aqi,
+                    "aqi_status": aqi_status
+                },
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            return result
+            
+        except Exception as e:
+            return {
+                "error": "Internal server error",
+                "details": str(e)
+            }
+
+    def _get_risk_level(self, aqi: int) -> str:
+        if aqi <= 50: return "Low"
+        elif aqi <= 100: return "Moderate"
+        elif aqi <= 150: return "High for Sensitive Groups"
+        elif aqi <= 200: return "High"
+        elif aqi <= 300: return "Very High"
+        else: return "Hazardous"
+
+    def _get_risk_description(self, aqi: int) -> str:
+        if aqi <= 50: return "Minimal health concerns"
+        elif aqi <= 100: return "Unusually sensitive individuals may experience minor symptoms"
+        elif aqi <= 150: return "People with heart or lung disease, older adults, and children are at greater risk"
+        elif aqi <= 200: return "Everyone may begin to experience health effects"
+        elif aqi <= 300: return "Health warnings of emergency conditions"
+        else: return "Health alert: everyone may experience serious health effects"
+
+    def _get_sensitive_groups(self) -> str:
+        return "Children, elderly, pregnant women, and people with heart or lung disease"
+
+    def _get_exposure_duration(self, aqi: int) -> str:
+        if aqi <= 100: return "Normal outdoor activities are generally safe"
+        elif aqi <= 150: return "Limit prolonged exertion (1-2 hours) for sensitive groups"
+        elif aqi <= 200: return "Limit outdoor activities to 30-60 minutes for sensitive groups"
+        else: return "Avoid all outdoor activities if possible"
+
+    def _get_recommended_actions(self, aqi: int) -> str:
+        if aqi <= 100: return "No special precautions needed"
+        elif aqi <= 150: return "Sensitive groups should reduce prolonged outdoor exertion"
+        elif aqi <= 200: return "Everyone should reduce prolonged outdoor exertion. Sensitive groups should stay indoors."
+        else: return "Stay indoors with windows closed. Use air purifiers if available"
 
 
 response_service = ResponseService()
