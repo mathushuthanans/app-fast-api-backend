@@ -290,36 +290,39 @@ class ResponseService:
                 "o3": "ppb"
             }
         }
+    
+    
 
-    def gemini_replay(self, prompt):
-        api_key = os.getenv("GEN_AI")  # Make sure your env variable is named exactly 'GEN_AI'
-        url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent"
-        
+
+
+    def groq_reply(scenario_text: str) -> str:
+        api_key = os.getenv("GEN_AI")
+        if not api_key:
+            raise ValueError("GEN_AI environment variable is not set")
+
+        url = "https://api.groq.com/openai/v1/chat/completions"
+
         headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
         }
 
+        prompt = f"Summarize this in 2 lines only, be plain and concise: {scenario_text}"
+
         data = {
-            "contents": [
-                {
-                    "parts": [
-                        {
-                            "text": prompt
-                        }
-                    ]
-                }
-            ]
+            "model": "llama3-70b-8192",
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.7
         }
 
         response = requests.post(url, headers=headers, json=data)
-        
+
         if response.status_code == 200:
-            response_json = response.json()
-            # Extract the generated text
-            return response_json["candidates"][0]["content"]["parts"][0]["text"]
+            return response.json()["choices"][0]["message"]["content"].strip()
         else:
-            raise Exception(f"Error {response.status_code}: {response.text}")
+            raise RuntimeError(f"API Error {response.status_code}: {response.text}")
 
     
     def _calculate_aqi(self, pm25, pm10, no2, co, o3):
