@@ -7,6 +7,7 @@ from app.models.datamodel1 import (
     ReducePollutionPlanRequest
 )
 from app.services.response_service import response_service
+from ml_models.ai_logic import ask_groq
 
 
 
@@ -123,6 +124,6 @@ def get_health_impact():
     return response_service.get_health_impact()
 
 @router.get("/ask_clarity")
-def askanything(prompt):
-    response_service.askanything(prompt)
+def ask(prompt):
+    return ask_groq(prompt)
 
