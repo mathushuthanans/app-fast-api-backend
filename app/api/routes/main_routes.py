@@ -127,3 +127,7 @@ def get_health_impact():
 def ask(prompt):
     return response_service.groq_reply(prompt)
 
+# Change this in your FastAPI backend
+@router.get("/asking")  # Changed from @router.post
+def ask(prompt):   # FastAPI will get 'prompt' from URL params
+    return response_service.groq_reply(prompt)
