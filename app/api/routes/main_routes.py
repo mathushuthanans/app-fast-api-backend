@@ -108,7 +108,7 @@ def suggest_policies(request: SuggestPoliciesRequest):
 
 @router.post("/citizen_actions")
 def citizen_scenario_actions(self):
-    return response_service.citizen_actions()
+    return response_service.get_citizen_actions()
 
 @router.get("/myth_buster")
 def myth_buster(claim: str):
