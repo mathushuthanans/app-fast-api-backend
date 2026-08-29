@@ -1,0 +1,30 @@
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables / secrets
+.env
+.env.*
+
+# Python cache / compiled files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Testing / type checking
+.pytest_cache/
+.mypy_cache/
+
+# Packaging
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo

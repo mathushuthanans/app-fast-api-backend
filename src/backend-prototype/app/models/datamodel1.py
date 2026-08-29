@@ -1,5 +1,4 @@
 from pydantic import BaseModel
-from typing import Any, TypedDict, cast
 
 # ML Model for health risk prediction
 class HealthRiskRequest(BaseModel):
@@ -10,11 +9,6 @@ class HealthRiskRequest(BaseModel):
     co: float
     asthma: int
     heart_disease: int
-
-class IndustrialZone(TypedDict):
-    distance: float
-    direction: str
-    impact: float
 
 # ML Model for region class prediction
 class RegionClassRequest(BaseModel):
@@ -60,10 +54,3 @@ class MythBusterRequest(BaseModel):
 class ReducePollutionPlanRequest(BaseModel):
     goal: str
     location: str
-
-class HealthImpactResponse(BaseModel):
-    risk_level: str
-    risk_description: str
-    sensitive_groups: str
-    exposure_duration: str
-    recommended_actions: str

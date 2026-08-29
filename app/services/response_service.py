@@ -4,14 +4,17 @@ import requests
 import joblib
 import numpy as np
 import os
-from app.models.datamodel1 import HealthRiskRequest, RegionClassRequest
+from app.models.datamodel1 import HealthRiskRequest, RegionClassRequest, IndustrialZone
 from app.services import extract_locations  # Fixed import path
-from app.config import API_URL_WAQI
-from ml_models.ai_logic import ask_groq
+from app.config import API_KEY_GEMINI, OPENWEATHER_API_KEY, OPENWEATHER_CURRENT_AIR_URL, OPENWEATHER_CURRENT_WEATHER_URL, OPENWEATHER_FORECAST_AIR_URL, OPENWEATHER_REVERSE_GEO_URL
+from ml_models.ai_logic import ask_gemini
 from ml_models.utils import calculate_overall_aqi as calc
 from datetime import datetime, timedelta
 import random
-import json 
+import json
+from typing import Any, TypedDict, cast, Literal, TypeAlias
+
+
 
 
 router = APIRouter()
@@ -27,76 +30,192 @@ class ResponseService:
         router.add_api_route("/get_location", self.get_location, methods=["GET"])
         router.add_api_route("/get_trends", self.get_trends, methods=["GET"])
 
-        self.college_coords = (21.1199, 79.0196)
-        self.industrial_areas = {
-            "Hingna MIDC": {"distance": 5.2, "direction": "NE", "impact": 0.7},
-            "Butibori": {"distance": 12.5, "direction": "SW", "impact": 0.9},
-            "Kamptee Road": {"distance": 3.8, "direction": "E", "impact": 0.4}
-        }
-
         self._current_data = None
         self._last_forecast = None
 
-    def get_location(self):
-        """Fetch current pollution data and forecast"""
-        response = requests.get(API_URL_WAQI)
-        if response.status_code != 200:
-            return {"error": f"API request failed: {response.status_code}"}
-
-        data = response.json()
-        self._current_data = data
-
-        forecast = data.get("data", {}).get("forecast", {}).get("daily", {})
-        self._last_forecast = {
-            "pm25": forecast.get("pm25", []),
-            "pm10": forecast.get("pm10", []),
-            "no2": forecast.get("no2", []),
-            "co": forecast.get("co", []),
-            "o3": forecast.get("o3", [])
+    def get_location(self, lat: float, lon: float) -> dict[str, Any]:
+        """Fetch current air pollution and forecast for supplied coordinates."""
+        params = {
+            "lat": lat,
+            "lon": lon,
+            "appid": OPENWEATHER_API_KEY,
         }
 
-        iaqi = data.get('data', {}).get('iaqi', {})
-        city = data.get('data', {}).get('city', {})
+        try:
+            current_response = requests.get(
+                OPENWEATHER_CURRENT_AIR_URL,
+                params=params,
+                timeout=10,
+            )
+            forecast_response = requests.get(
+                OPENWEATHER_FORECAST_AIR_URL,
+                params=params,
+                timeout=10,
+            )
+            weather_response = requests.get(
+                OPENWEATHER_CURRENT_WEATHER_URL,
+                params={**params, "units": "metric"},
+                timeout=10,
+            )
+            geocode_response = requests.get(
+                OPENWEATHER_REVERSE_GEO_URL,
+                params={**params, "limit": 1},
+                timeout=10,
+            )
 
-        aqi = self._calculate_aqi(
-            iaqi.get('pm25', {}).get('v'),
-            iaqi.get('pm10', {}).get('v'),
-            iaqi.get('no2', {}).get('v'),
-            iaqi.get('co', {}).get('v'),
-            iaqi.get('o3', {}).get('v')
-        )
-
-        return {
-            "status": "success",
-            "data": {
-                "location": {
-                    "city": city.get('name', 'Delhi, India'),
-                    "coordinates": city.get('geo', [])
-                },
-                "date": datetime.now().strftime("%B %d, %Y - %A"),
-                "weather": {
-                    "temp": iaqi.get('t', {}).get('v'),
-                    "description": "Partly Cloudy"
-                },
-                "pollution": {
-                    "aqi": aqi,
-                    "pm25": iaqi.get('pm25', {}).get('v'),
-                    "pm10": iaqi.get('pm10', {}).get('v'),
-                    "no2": iaqi.get('no2', {}).get('v'),
-                    "co": iaqi.get('co', {}).get('v'),
-                    "o3": iaqi.get('o3', {}).get('v'),
-                    "aqi_status": self._get_aqi_status(aqi)
+            if current_response.status_code != 200:
+                return {
+                    "error": (
+                        f"OpenWeather current-air request failed: "
+                        f"{current_response.status_code}"
+                    )
                 }
-            }
-        }
 
-    def get_trends(self, range: str = "weekly"):
+            if forecast_response.status_code != 200:
+                return {
+                    "error": (
+                        f"OpenWeather forecast request failed: "
+                        f"{forecast_response.status_code}"
+                    )
+                }
+
+            current_data = current_response.json()
+            forecast_data = forecast_response.json()
+
+            current_list = current_data.get("list", [])
+            forecast_list = forecast_data.get("list", [])
+
+            if not current_list:
+                return {"error": "OpenWeather returned no current air-pollution data"}
+
+            current_entry = current_list[0]
+            components = current_entry.get("components", {})
+            openweather_aqi = current_entry.get("main", {}).get("aqi")
+
+            pm25 = float(components.get("pm2_5", 0))
+            pm10 = float(components.get("pm10", 0))
+            no2 = float(components.get("no2", 0))
+            co = float(components.get("co", 0))
+            o3 = float(components.get("o3", 0))
+
+            # Keep your existing app AQI calculation instead of OpenWeather's 1–5 AQI.
+            aqi = self._calculate_aqi(pm25, pm10, no2, co, o3)
+
+            # Convert OpenWeather's hourly forecast into your existing
+            # [{"day": "YYYY-MM-DD", "avg": number}] trend format.
+            daily_values: dict[str, dict[str, list[float]]] = {}
+
+            pollutant_map = {
+                "pm25": "pm2_5",
+                "pm10": "pm10",
+                "no2": "no2",
+                "co": "co",
+                "o3": "o3",
+            }
+
+            for entry in forecast_list:
+                date = datetime.fromtimestamp(
+                    entry["dt"]
+                ).strftime("%Y-%m-%d")
+
+                daily_values.setdefault(
+                    date,
+                    {pollutant: [] for pollutant in pollutant_map},
+                )
+
+                forecast_components = entry.get("components", {})
+
+                for pollutant, openweather_name in pollutant_map.items():
+                    value = forecast_components.get(openweather_name)
+
+                    if value is not None:
+                        daily_values[date][pollutant].append(float(value))
+
+            self._last_forecast = {
+                pollutant: [
+                    {
+                        "day": date,
+                        "avg": round(
+                            sum(values[pollutant]) / len(values[pollutant]),
+                            2,
+                        ),
+                    }
+                    for date, values in sorted(daily_values.items())
+                    if values[pollutant]
+                ]
+                for pollutant in pollutant_map
+            }
+
+            self._current_data = current_data
+
+            city = f"{lat:.4f}, {lon:.4f}"
+
+            if geocode_response.status_code == 200:
+                geocode_data = geocode_response.json()
+
+                if geocode_data:
+                    place = geocode_data[0]
+                    city = ", ".join(
+                        part
+                        for part in [
+                            place.get("name"),
+                            place.get("state"),
+                            place.get("country"),
+                        ]
+                        if part
+                    )
+
+            temperature = None
+            weather_description = "Unavailable"
+
+            if weather_response.status_code == 200:
+                weather_data = weather_response.json()
+                temperature = weather_data.get("main", {}).get("temp")
+
+                weather_items = weather_data.get("weather", [])
+                if weather_items:
+                    weather_description = weather_items[0].get(
+                        "description",
+                        "Unavailable",
+                    )
+
+            return {
+                "status": "success",
+                "data": {
+                    "location": {
+                        "city": city,
+                        "coordinates": [lat, lon],
+                    },
+                    "date": datetime.now().strftime("%B %d, %Y - %A"),
+                    "weather": {
+                        "temp": temperature,
+                        "description": weather_description,
+                    },
+                    "pollution": {
+                        "aqi": aqi,
+                        "pm25": pm25,
+                        "pm10": pm10,
+                        "no2": no2,
+                        "co": co,
+                        "o3": o3,
+                        "aqi_status": self._get_aqi_status(aqi),
+                        "openweather_aqi": openweather_aqi,
+                    },
+                },
+            }
+
+        except requests.RequestException as error:
+            return {"error": f"OpenWeather request failed: {error}"}
+        except (KeyError, TypeError, ValueError) as error:
+            return {"error": f"Invalid OpenWeather response: {error}"}
+
+    def get_trends(self, lat: float, lon: float, range: str = "weekly"):
         """Get trends for all pollutants"""
         range = range.lower()
         if range not in ["weekly", "monthly", "yearly"]:
             return {"error": "Invalid range. Use 'weekly', 'monthly', or 'yearly'"}
 
-        location_data = self.get_location()
+        location_data = self.get_location(lat, lon)
         if 'error' in location_data:
             return location_data
 
@@ -107,57 +226,25 @@ class ResponseService:
         else:
             return self._get_yearly_data()
 
-    def _get_weekly_data(self):
-        """Weekly trends for all pollutants with proper null handling"""
+    def _get_weekly_data(self) -> dict[str, Any]:
+        """Return available daily averages from the OpenWeather forecast."""
         if not self._last_forecast:
             return {"error": "No forecast data available"}
 
-        weekly_data = []
-        pollutants = ['pm25', 'pm10', 'no2', 'co', 'o3']
-        
-        # Get maximum available forecast days
-        forecast_days = min(7, max(
-            len(self._last_forecast.get('pm25', [])),
-            len(self._last_forecast.get('pm10', [])),
-            len(self._last_forecast.get('no2', [])),
-            len(self._last_forecast.get('co', [])),
-            len(self._last_forecast.get('o3', []))
-        ))
+        pollutants = ["pm25", "pm10", "no2", "co", "o3"]
+        data_by_date: dict[str, dict[str, str | float | None]] = {}
 
-        # Add forecast data
-        for i in range(forecast_days):
-            day_data = {"date": self._last_forecast['pm25'][i]['day']} if self._last_forecast.get('pm25') else {}
-            
-            for pol in pollutants:
-                # Safely get pollutant data
-                pol_data = self._last_forecast.get(pol, [])
-                if i < len(pol_data) and 'avg' in pol_data[i]:
-                    day_data[pol] = pol_data[i]['avg']
-                else:
-                    # Try to estimate based on pm25 if data is missing
-                    if pol == 'pm10' and 'pm25' in day_data:
-                        day_data[pol] = round(day_data['pm25'] * 0.42, 1)  # Typical ratio
-                    elif pol == 'no2' and 'pm25' in day_data:
-                        day_data[pol] = round(day_data['pm25'] * 0.3, 1)
-                    elif pol == 'co' and 'pm25' in day_data:
-                        day_data[pol] = round(day_data['pm25'] * 0.008, 3)  # ppm
-                    elif pol == 'o3' and 'pm25' in day_data:
-                        day_data[pol] = round(day_data['pm25'] * 0.25, 1)
-                    else:
-                        day_data[pol] = None
-            
-            if day_data:
-                weekly_data.append(day_data)
+        for pollutant in pollutants:
+            for forecast_day in self._last_forecast.get(pollutant, []):
+                date = str(forecast_day["day"])
 
-        # Add current day's data if available
-        if self._current_data and 'iaqi' in self._current_data.get('data', {}):
-            iaqi = self._current_data['data']['iaqi']
-            current_day = {
-                "date": datetime.now().strftime("%Y-%m-%d")
-            }
-            for pol in pollutants:
-                current_day[pol] = iaqi.get(pol, {}).get('v')
-            weekly_data.append(current_day)
+                data_by_date.setdefault(date, {"date": date})
+                data_by_date[date][pollutant] = float(forecast_day["avg"])
+
+        weekly_data = [
+            data_by_date[date]
+            for date in sorted(data_by_date)
+        ]
 
         return {
             "range": "weekly",
@@ -165,70 +252,79 @@ class ResponseService:
             "units": {
                 "pm25": "µg/m³",
                 "pm10": "µg/m³",
-                "no2": "ppb",
-                "co": "ppm",
-                "o3": "ppb"
-            }
+                "no2": "µg/m³",
+                "co": "µg/m³",
+                "o3": "µg/m³",
+            },
+            "note": (
+                "OpenWeather provides an hourly air-pollution forecast "
+                "for up to four days."
+            ),
         }
-
     def _get_monthly_data(self):
-        """Monthly averages for all pollutants"""
+        """Monthly averages for all pollutants."""
         if not self._last_forecast:
             return {"error": "No forecast data available"}
 
-        # Get current month's data from forecast
-        current_month_data = {}
-        pollutants = ['pm25', 'pm10', 'no2', 'co', 'o3']
-        
+        current_month_data: dict[str, dict[str, list[float]]] = {}
+        pollutants = ["pm25", "pm10", "no2", "co", "o3"]
+
         for pol in pollutants:
             for day in self._last_forecast.get(pol, []):
-                month = day['day'][:7]
-                current_month_data.setdefault(month, {}).setdefault(pol, []).append(day['avg'])
+                month = str(day["day"])[:7]
+                current_month_data.setdefault(month, {}).setdefault(pol, []).append(
+                    float(day["avg"])
+                )
 
-        months_data = []
-        now = datetime.now()
-        
         if not current_month_data:
             return {"error": "No monthly data available"}
 
-        # Calculate baseline averages from current month
+        now = datetime.now()
+
+        # Calculate baseline averages from the first available forecast month.
         first_month = next(iter(current_month_data))
-        baseline = {}
+        baseline: dict[str, float] = {}
+
         for pol in pollutants:
             if pol in current_month_data[first_month]:
-                baseline[pol] = sum(current_month_data[first_month][pol]) / len(current_month_data[first_month][pol])
+                values = current_month_data[first_month][pol]
+                baseline[pol] = sum(values) / len(values)
+            elif pol == "pm10":
+                baseline[pol] = baseline.get("pm25", 50.0) * 1.3
+            elif pol == "no2":
+                baseline[pol] = baseline.get("pm25", 50.0) * 0.3
+            elif pol == "co":
+                baseline[pol] = baseline.get("pm25", 50.0) * 0.1
+            elif pol == "o3":
+                baseline[pol] = baseline.get("pm25", 50.0) * 0.2
             else:
-                # Default ratios if data missing
-                if pol == 'pm10':
-                    baseline[pol] = baseline.get('pm25', 50) * 1.3
-                elif pol == 'no2':
-                    baseline[pol] = baseline.get('pm25', 50) * 0.3
-                elif pol == 'co':
-                    baseline[pol] = baseline.get('pm25', 50) * 0.1
-                elif pol == 'o3':
-                    baseline[pol] = baseline.get('pm25', 50) * 0.2
+                baseline[pol] = 50.0
 
-        # Generate 12 months of data
+        months_data: list[dict[str, str | float]] = []
+
         for i in range(11, -1, -1):
             month_date = now - timedelta(days=30 * i)
             month_str = month_date.strftime("%Y-%m")
-            
-            # Seasonal variation factor
-            seasonal = 1.0 + 0.3 * math.sin(2 * math.pi * (month_date.month - 1) / 12)
+
+            seasonal = 1.0 + 0.3 * math.sin(
+                2 * math.pi * (month_date.month - 1) / 12
+            )
             variation = random.uniform(0.9, 1.1)
-            
-            month_data = {"month": month_str}
-            
+
+            month_data: dict[str, str | float] = {"month": month_str}
+
             for pol in pollutants:
-                # Calculate value with seasonal variation
                 value = baseline[pol] * seasonal * variation
-                
-                # Use real data if available for this month
-                if month_str in current_month_data and pol in current_month_data[month_str]:
-                    value = sum(current_month_data[month_str][pol]) / len(current_month_data[month_str][pol])
-                
+
+                if (
+                    month_str in current_month_data
+                    and pol in current_month_data[month_str]
+                ):
+                    values = current_month_data[month_str][pol]
+                    value = sum(values) / len(values)
+
                 month_data[f"avg_{pol}"] = round(value, 1)
-            
+
             months_data.append(month_data)
 
         return {
@@ -239,44 +335,58 @@ class ResponseService:
                 "pm10": "µg/m³",
                 "no2": "ppb",
                 "co": "ppm",
-                "o3": "ppb"
-            }
+                "o3": "ppb",
+            },
         }
+        from typing import Any
 
-    def _get_yearly_data(self):
-        """Yearly averages for all pollutants"""
+
+    def _get_yearly_data(self) -> dict[str, Any]:
+        """Yearly averages for all pollutants."""
         monthly_data = self._get_monthly_data()
-        if 'error' in monthly_data:
+
+        if "error" in monthly_data:
             return monthly_data
 
         now = datetime.now()
         current_year = now.year
-        pollutants = ['pm25', 'pm10', 'no2', 'co', 'o3']
-        
-        # Calculate current year averages
-        yearly_avgs = {}
+        pollutants = ["pm25", "pm10", "no2", "co", "o3"]
+
+        # Calculate current-year averages
+        monthly_records = cast(
+            list[dict[str, str | float]],
+            monthly_data["data"],
+        )
+
+        yearly_avgs: dict[str, float] = {}
+
         for pol in pollutants:
-            pol_values = [m[f"avg_{pol}"] for m in monthly_data['data']]
+            pol_values = [
+                float(month[f"avg_{pol}"])
+                for month in monthly_records
+            ]
             yearly_avgs[pol] = sum(pol_values) / len(pol_values)
 
-        yearly_data = []
-        
+        yearly_data: list[dict[str, str | float]] = []
+
         # Generate 5 years of data
         for i in range(4, -1, -1):
             year = current_year - i
-            improvement = 0.96 + i * 0.01  # More improvement in recent years
+
+            improvement = 0.96 + i * 0.01
             variation = random.uniform(0.95, 1.05)
-            
-            year_data = {"year": str(year)}
-            
+
+            year_data: dict[str, str | float] = {"year": str(year)}
+
             for pol in pollutants:
                 value = yearly_avgs[pol] * improvement * variation
+
                 if year == current_year:
                     value = yearly_avgs[pol]
-                
+
                 year_data[f"avg_{pol}"] = round(value, 1)
-                year_data["improvement"] = f"{round((1 - improvement) * 100, 1)}%"
-            
+
+            year_data["improvement"] = f"{round((1 - improvement) * 100, 1)}%"
             yearly_data.append(year_data)
 
         return {
@@ -287,11 +397,11 @@ class ResponseService:
                 "pm10": "µg/m³",
                 "no2": "ppb",
                 "co": "ppm",
-                "o3": "ppb"
-            }
+                "o3": "ppb",
+            },
         }
-    
-    
+
+
 
 
 
@@ -324,28 +434,132 @@ class ResponseService:
         else:
             raise RuntimeError(f"API Error {response.status_code}: {response.text}")
 
-    
-    def _calculate_aqi(self, pm25, pm10, no2, co, o3):
-        """Calculate overall AQI from pollutant values"""
-        # Simplified AQI calculation - replace with your actual formula
-        if None in [pm25, pm10, no2, co, o3]:
+
+    def _calculate_aqi(
+        self,
+        pm25: float | None,
+        pm10: float | None,
+        no2: float | None,
+        co: float | None,
+        o3: float | None,
+    ) -> int | None:
+        """
+        Calculate an approximate 0–500 AQI from OpenWeather concentrations.
+
+        OpenWeather returns all pollutant components in µg/m³.
+        AQI breakpoints for CO, NO2, and O3 require converted units.
+        """
+
+        # Make sure all pollutant values are available.
+        if (
+            pm25 is None
+            or pm10 is None
+            or no2 is None
+            or co is None
+            or o3 is None
+        ):
             return None
-            
-        weights = {
-            'pm25': 0.4,
-            'pm10': 0.3,
-            'no2': 0.15,
-            'co': 0.1,
-            'o3': 0.05
-        }
-        
-        weighted = (pm25 * weights['pm25'] + 
-                   pm10 * weights['pm10'] + 
-                   no2 * weights['no2'] + 
-                   co * weights['co'] * 10 +  # Convert ppm to ppb
-                   o3 * weights['o3'])
-        
-        return round(weighted)
+
+        # Explicitly convert to float so Pylance knows these are not None.
+        pm25_value = float(pm25)
+        pm10_value = float(pm10)
+        no2_value = float(no2)
+        co_value = float(co)
+        o3_value = float(o3)
+
+        def calculate_sub_index(
+            concentration: float,
+            breakpoints: list[tuple[float, float, int, int]],
+        ) -> float:
+            for low_c, high_c, low_i, high_i in breakpoints:
+                if low_c <= concentration <= high_c:
+                    return (
+                        (high_i - low_i)
+                        / (high_c - low_c)
+                        * (concentration - low_c)
+                        + low_i
+                    )
+
+            return 500.0 if concentration > breakpoints[-1][1] else 0.0
+
+        # PM2.5 and PM10 are already in µg/m³.
+        pm25_aqi = calculate_sub_index(
+            pm25_value,
+            [
+                (0.0, 12.0, 0, 50),
+                (12.1, 35.4, 51, 100),
+                (35.5, 55.4, 101, 150),
+                (55.5, 150.4, 151, 200),
+                (150.5, 250.4, 201, 300),
+                (250.5, 350.4, 301, 400),
+                (350.5, 500.4, 401, 500),
+            ],
+        )
+
+        pm10_aqi = calculate_sub_index(
+            pm10_value,
+            [
+                (0.0, 54.0, 0, 50),
+                (55.0, 154.0, 51, 100),
+                (155.0, 254.0, 101, 150),
+                (255.0, 354.0, 151, 200),
+                (355.0, 424.0, 201, 300),
+                (425.0, 504.0, 301, 400),
+                (505.0, 604.0, 401, 500),
+            ],
+        )
+
+        # OpenWeather µg/m³ → AQI breakpoint units.
+        no2_ppb = no2_value / 1.88
+        o3_ppb = o3_value / 1.96
+        co_ppm = co_value / 1145.0
+
+        no2_aqi = calculate_sub_index(
+            no2_ppb,
+            [
+                (0.0, 53.0, 0, 50),
+                (54.0, 100.0, 51, 100),
+                (101.0, 360.0, 101, 150),
+                (361.0, 649.0, 151, 200),
+                (650.0, 1249.0, 201, 300),
+                (1250.0, 1649.0, 301, 400),
+                (1650.0, 2049.0, 401, 500),
+            ],
+        )
+
+        o3_aqi = calculate_sub_index(
+            o3_ppb,
+            [
+                (0.0, 54.0, 0, 50),
+                (55.0, 70.0, 51, 100),
+                (71.0, 85.0, 101, 150),
+                (86.0, 105.0, 151, 200),
+                (106.0, 200.0, 201, 300),
+            ],
+        )
+
+        co_aqi = calculate_sub_index(
+            co_ppm,
+            [
+                (0.0, 4.4, 0, 50),
+                (4.5, 9.4, 51, 100),
+                (9.5, 12.4, 101, 150),
+                (12.5, 15.4, 151, 200),
+                (15.5, 30.4, 201, 300),
+                (30.5, 40.4, 301, 400),
+                (40.5, 50.4, 401, 500),
+            ],
+        )
+
+        return round(
+            max(
+                pm25_aqi,
+                pm10_aqi,
+                no2_aqi,
+                o3_aqi,
+                co_aqi,
+            )
+        )
 
     def _get_aqi_status(self, aqi):
         """Get AQI status string"""
@@ -364,90 +578,124 @@ class ResponseService:
         else:
             return "Hazardous"
 
-    def get_vehicle_density(self, hour: int = None):
-        """Estimates vehicle density near Pallotti College"""
-        hour = hour if hour is not None else datetime.now().hour
-        
-        # Nagpur-specific traffic patterns (Amravati Road)
-        patterns = {
-            "morning_peak": (7, 10, 85, 120, 10),   # cars, bikes, buses per km
-            "evening_peak": (16, 19, 90, 130, 12),
-            "daytime": (11, 15, 45, 70, 6),
-            "night": (20, 6, 15, 30, 2)
-        }
+    def get_vehicle_density(self, hour: int | None = None):
+        """Estimate vehicle density near Pallotti College."""
+        if hour is None:
+            hour = datetime.now().hour
 
-        for period in patterns.values():
-            if period[0] <= hour <= period[1]:
-                cars, bikes, buses = period[2], period[3], period[4]
-                break
-        
-        # Add commercial vehicles (Nagpur logistics impact)
-        commercial = random.randint(8, 15) if 8 <= hour <= 20 else random.randint(2, 5)
-        
+        if not 0 <= hour <= 23:
+            raise ValueError("hour must be between 0 and 23")
+
+        if 7 <= hour < 10:
+            cars, bikes, buses = 85, 120, 10
+            period_name = "morning_peak"
+        elif 16 <= hour < 19:
+            cars, bikes, buses = 90, 130, 12
+            period_name = "evening_peak"
+        elif 10 <= hour < 16:
+            cars, bikes, buses = 45, 70, 6
+            period_name = "daytime"
+        else:
+            cars, bikes, buses = 15, 30, 2
+            period_name = "night_or_off_peak"
+
+        commercial = (
+            random.randint(8, 15)
+            if 8 <= hour <= 20
+            else random.randint(2, 5)
+        )
+
         return {
             "location": "Amravati Road near St. Vincent Pallotti College",
             "time": f"{hour:02d}:00",
+            "traffic_period": period_name,
             "density": {
                 "cars_per_km": cars,
                 "bikes_per_km": bikes,
                 "buses_per_km": buses,
                 "commercial_vehicles": commercial,
-                "total_per_km": cars + bikes + buses + commercial
+                "total_per_km": cars + bikes + buses + commercial,
             },
             "peak_hours": {
                 "morning": "7:00-10:00",
-                "evening": "16:00-19:00"
-            }
+                "evening": "16:00-19:00",
+            },
         }
 
-    def get_industrial_impact(self):
-        """Analyzes industrial impact on college area"""
-        impacts = []
-        total_impact = 0
-        
-        # Calculate impact from each industrial zone
-        for name, zone in self.industrial_areas.items():
-            # Distance-based impact with randomness
-            impact = (1 / zone["distance"]) * zone["impact"] * random.uniform(0.8, 1.2)
-            impacts.append({
-                "name": name,
-                "distance_km": zone["distance"],
-                "direction": zone["direction"],
-                "impact_score": round(impact, 2),
-                "primary_pollutants": self._get_industrial_pollutants(name)
-            })
-            total_impact += impact
+    def get_industrial_impact(self, lat: float, lon: float) -> dict[str, Any]:
+        """Estimate emission-source impact for the current WAQI station."""
+        location_data = cast(dict[str, Any], self.get_location(lat, lon))
 
-        # Normalize to 0-1 scale
-        max_possible_impact = sum(1/z["distance"] for z in self.industrial_areas.values())
-        normalized_impact = total_impact / max_possible_impact
+        if location_data.get("status") != "success":
+            return {"error": "Failed to fetch current location data"}
+
+        location = location_data["data"]["location"]
+        pollution = location_data["data"]["pollution"]
+
+        aqi = float(pollution.get("aqi") or 0)
+        pollution_factor = min(max(aqi / 300, 0.0), 1.0)
+
+        source_profiles: list[tuple[str, float]] = [
+            ("Industrial and manufacturing activity", 0.45),
+            ("Freight and commercial transport", 0.35),
+            ("Construction and road dust", 0.20),
+        ]
+
+        impacts: list[dict[str, Any]] = []
+
+        for source_name, base_weight in source_profiles:
+            impact_score = base_weight * (0.5 + pollution_factor)
+
+            impacts.append({
+                "name": source_name,
+                "impact_score": round(impact_score, 2),
+                "primary_pollutants": self._get_industrial_pollutants(source_name),
+                "source": "AQI-based estimate",
+            })
+
+        composite_impact = sum(
+            float(item["impact_score"])
+            for item in impacts
+        )
+
+        dominant_source = max(
+            impacts,
+            key=lambda item: float(item["impact_score"]),
+        )["name"]
 
         return {
-            "location": "St. Vincent Pallotti College",
-            "industrial_zones": impacts,
-            "composite_impact": round(normalized_impact, 2),
-            "health_risk": self._assess_health_risk(normalized_impact),
-            "dominant_zone": max(impacts, key=lambda x: x["impact_score"])["name"]
+            "location": location.get("city", "Unknown location"),
+            "coordinates": location.get("coordinates", []),
+            "industrial_sources": impacts,
+            "composite_impact": round(composite_impact, 2),
+            "health_risk": self._assess_health_risk(composite_impact),
+            "dominant_source": dominant_source,
+            "note": (
+                "This is an AQI-based estimate for the configured WAQI station. "
+                "It does not identify verified nearby industrial facilities."
+            ),
         }
 
-    def _get_industrial_pollutants(self, zone_name: str) -> list:
-        """Returns pollutants by industrial zone type"""
-        zone_pollutants = {
-            "Hingna MIDC": ["PM2.5", "NO2", "SO2"],
-            "Butibori": ["PM10", "SO2", "CO"],
-            "Kamptee Road": ["PM2.5", "NO2"]
-        }
-        return zone_pollutants.get(zone_name, ["PM2.5"])
     def _assess_health_risk(self, impact: float) -> str:
+        """Convert an estimated impact score into a simple health-risk label."""
         if impact < 0.2:
-            return "Low risk: Minimal health concerns from industrial pollution."
-        elif 0.2 <= impact < 0.5:
-            return "Moderate risk: Sensitive individuals may experience minor health effects."
-        elif 0.5 <= impact < 0.8:
-            return "Elevated risk: Potential for respiratory and other health issues, especially for vulnerable groups."
-        else:
-            return "High risk: Significant health concerns, may affect general population."
+            return "Low"
+        if impact < 0.5:
+            return "Moderate"
+        if impact < 0.8:
+            return "Elevated"
+        return "High"
 
+
+    def _get_industrial_pollutants(self, source_name: str) -> list[str]:
+        """Return expected pollutants for each general emission source."""
+        source_pollutants = {
+            "Industrial and manufacturing activity": ["PM2.5", "NO2", "SO2"],
+            "Freight and commercial transport": ["PM2.5", "NO2", "CO"],
+            "Construction and road dust": ["PM10", "PM2.5"],
+        }
+
+        return source_pollutants.get(source_name, ["PM2.5"])
 
 
 
@@ -456,205 +704,170 @@ class ResponseService:
         features = np.array([[data.pm25, data.pm10, data.no2, data.o3, data.co, data.asthma, data.heart_disease]])
         danger_scale = health_model.predict(features)[0]
         return {"danger_scale": danger_scale}
-            
+
     def predict_region_class(self, data: RegionClassRequest):
         features = np.array([[data.pm25, data.pm10, data.no2, data.o3, data.co]])
         region_class = region_model.predict(features)[0]
         return {"region_class": region_class}
 
-    def bridge_predict(self, asthma: int = 0, heart_disease: int = 0):
-        response = requests.get(API_URL_WAQI)
-        if response.status_code != 200:
-            return {"error": f"API request failed: {response.status_code}"}
+    def bridge_predict(
+        self,
+        lat: float,
+        lon: float,
+        asthma: int = 0,
+        heart_disease: int = 0,
+    ) -> dict[str, Any]:
+        """Predict health risk and region class from current OpenWeather data."""
+        location_data = self.get_location(lat, lon)
 
-        data = response.json()
-        if data.get("status") != "ok":
-            return {"error": "API returned non-ok status."}
-        
-        iaqi = data["data"]["iaqi"]
-        pm25 = iaqi.get("pm25", {}).get("v", None)
-        pm10 = iaqi.get("pm10", {}).get("v", None)
-        no2 = iaqi.get("no2", {}).get("v", None)
-        o3 = iaqi.get("o3", {}).get("v", None)
-        co = iaqi.get("co", {}).get("v", None)
+        if "error" in location_data:
+            return location_data
+
+        location = location_data["data"]["location"]
+        pollution = location_data["data"]["pollution"]
+
+        pm25 = pollution.get("pm25")
+        pm10 = pollution.get("pm10")
+        no2 = pollution.get("no2")
+        o3 = pollution.get("o3")
+        co = pollution.get("co")
 
         if None in [pm25, pm10, no2, o3, co]:
-            return {"error": "Incomplete AQI data received"}
+            return {"error": "Incomplete OpenWeather pollution data"}
 
-        # Predict
-        health_features = np.array([[pm25, pm10, no2, o3, co, asthma, heart_disease]])
+        health_features = np.array([
+            [pm25, pm10, no2, o3, co, asthma, heart_disease]
+        ])
         danger_scale = int(health_model.predict(health_features)[0])
 
-        region_features = np.array([[pm25, pm10, no2, o3, co]])
+        region_features = np.array([
+            [pm25, pm10, no2, o3, co]
+        ])
         region_class = int(region_model.predict(region_features)[0])
 
         return {
-            "location": {
-                "city": data["data"]["city"]["name"],
-                "coordinates": data["data"]["city"]["geo"]
-            },
+            "location": location,
             "aqi_values": {
                 "pm25": pm25,
                 "pm10": pm10,
                 "no2": no2,
                 "o3": o3,
-                "co": co
+                "co": co,
             },
             "predictions": {
                 "danger_scale": danger_scale,
-                "region_class": region_class
-            }
+                "region_class": region_class,
+            },
         }
 
-    def get_scenario_presets(self):
-        """Auto-fetch pollution data and generate negative scenarios"""
-        location_data = self.get_location()
+    def get_scenario_presets(self, lat: float, lon: float):
+        """Generate estimated no-action pollution scenarios for the current WAQI station."""
+        location_data = cast(dict[str, Any], self.get_location(lat, lon))
 
         if location_data.get("status") != "success":
             return {"error": "Failed to fetch current location data"}
 
         try:
-            loc_info = location_data["data"]["location"]
-            pollution = location_data["data"]["pollution"]
+            data = cast(dict[str, Any], location_data["data"])
+            location = str(data["location"]["city"])
+            pollution = cast(dict[str, Any], data["pollution"])
 
-            location = loc_info["city"]
-            aqi = pollution["aqi"]
-            pm25 = pollution["pm25"]
-            pm10 = pollution["pm10"]
-            no2 = pollution["no2"]
-            co = pollution["co"]
-            o3 = pollution["o3"]
+            aqi = float(pollution["aqi"])
+            pm25 = float(pollution["pm25"])
+            pm10 = float(pollution["pm10"])
+            no2 = float(pollution["no2"])
+            co = float(pollution["co"])
+            o3 = float(pollution["o3"])
 
-            prompt = f"""
-        You are Clarity, an AI that simulates future environmental risks.
+            prompt = f""" You are Clarity, an AI that simulates future environmental risks.
+                    Region: {location}
+                    Current AQI: {aqi}
 
-        📍 Region: {location}  
-        📊 AQI: {aqi}  
-        🌫 Current pollutant levels:
-        - PM2.5: {pm25} µg/m³
-        - PM10: {pm10} µg/m³
-        - NO2: {no2} ppb
-        - CO: {co} ppb
-        - O3: {o3} µg/m³
+                    Current pollutant levels:
+                    - PM2.5: {pm25} µg/m³
+                    - PM10: {pm10} µg/m³
+                    - NO2: {no2} ppb
+                    - CO: {co} ppb
+                    - O3: {o3} µg/m³
 
-        🚧 Static emission sources to consider in this region {location}. search about the below to provide the right scenerio
-        - Dense traffic (fossil-fueled vehicles)
-        - Nearby industries (manufacturing zones)
-        - Fossil-based electricity consumption
+                    Generate exactly 3 possible negative future scenarios, assuming no action is taken.
 
-        ⚠️ Task:
-        Generate 3 possible **negative future scenarios** assuming **no action is taken**.  
-        Each scenario should show how pollution may worsen due to current sources.
+                    For each scenario return:
+                    - id: unique ID such as "scenario1"
+                    - name: short title
+                    - description: what caused it
+                    - top_pollutant_risks: array containing 1 to 3 items:
+                    {{"pollutant": "PM2.5", "increase_percent": 28}}
+                    - main_sources: array of 2 to 3 sources
+                    - health_risks: array of 2 to 3 health risks
+                    - aqi_label: for example "Unhealthy" or "Hazardous"
 
-        📝 Format each scenario with:
-        - `id`: unique id like "scenario1"
-        - `name`: short scenario title
-        - `description`: what caused this scenario
-        - `top_pollutant_risks`: array of 1–3 pollutant entries, each like:  
-        {{ "pollutant": "PM2.5", "increase_percent": 28 }}
-        - `main_sources`: 2–3 major contributors (like "diesel vehicles", "power plants")
-        - `health_risks`: 2–3 expected human health issues (like "lung cancer", "asthma")
-        - `aqi_label`: forecast AQI level name (e.g., "Unhealthy", "Hazardous")
+                    Return only a valid JSON array.
+                    """
 
-        Return ONLY the JSON array of 3 scenarios.
-        """
-            return ask_groq(prompt)
-
-        except Exception as e:
-            return {"error": f"Failed to build scenario prompt: {str(e)}"}
+            return ask_gemini(prompt)
+        except (KeyError, TypeError, ValueError) as error:
+            return {"error": f"Invalid pollution data: {error}"}
+        except Exception as error:
+            return {"error": f"Failed to generate scenarios: {error}"}
 
 
-    def get_citizen_actions(self):
-        """Get pollution data and provide direct action recommendations"""
-        location_data = self.get_location()
+
+
+    def get_citizen_actions(self, lat: float, lon: float):
+        location_data = self.get_location(lat, lon)
 
         if location_data.get("status") != "success":
             return {"error": "Failed to fetch current location data"}
 
         try:
-            loc_info = location_data["data"]["location"]
-            pollution = location_data["data"]["pollution"]
+            response_data = cast(dict[str, Any], location_data["data"])
+            loc_info = cast(dict[str, Any], response_data["location"])
+            pollution = cast(dict[str, Any], response_data["pollution"])
 
-            location = loc_info["city"]
-            aqi = pollution["aqi"]
-            pm25 = pollution["pm25"]
-            pm10 = pollution["pm10"]
-            no2 = pollution["no2"]
-            co = pollution["co"]
-            o3 = pollution["o3"]
+            location = str(loc_info.get("city", "Unknown location"))
+            aqi = pollution.get("aqi")
+            pm25 = pollution.get("pm25")
+            pm10 = pollution.get("pm10")
+            no2 = pollution.get("no2")
+            co = pollution.get("co")
+            o3 = pollution.get("o3")
+
+            if None in [aqi, pm25, pm10, no2, co, o3]:
+                return {
+                    "error": "Incomplete pollution data received",
+                    "location": location,
+                }
 
             prompt = f"""
-    You are Clarity, an AI assistant for pollution risk awareness.
+    You are Clarity, an AI assistant for pollution-risk awareness.
 
-    📍 Current Location: {location}  
-    📊 Current Air Quality Index: {aqi}  
-    🌫 Current pollutant levels:
+    Current location: {location}
+    Current AQI: {aqi}
+
+    Current pollutant levels:
     - PM2.5: {pm25} µg/m³
     - PM10: {pm10} µg/m³
     - NO2: {no2} ppb
     - CO: {co} ppb
     - O3: {o3} µg/m³
 
-    Based on these current pollution levels, provide direct behavioral guidance for citizens.
+    Give practical guidance for citizens based on these current levels.
 
-    Structure your output as:
+    Return ONLY valid JSON in this format:
     {{
-        "do": ["Essential protective actions"],
-        "dont": ["Behaviors to avoid"],
-        "minimize": ["Habits to reduce"]
+      "do": ["Essential protective actions"],
+      "dont": ["Behaviors to avoid"],
+      "minimize": ["Habits to reduce"]
     }}
-
-    Respond ONLY with that JSON structure.
     """
-            return ask_groq(prompt)
 
-        except Exception as e:
-            return {"error": f"Failed to process data: {str(e)}"}
+            return ask_gemini(prompt)
 
-    def help_info(self):
-        message = """
-    Clarity is an AI assistant that explains pollution data and health risks to citizens, policymakers, and students. It suggests actions, predicts policy impacts, creates quizzes, and simulates urban planning scenarios to promote pollution awareness and healthier communities.
-    """
-        return {"help": message}
-
-
-    def explain_pollution(self, pollutant: str):
-        prompt = (
-            f"Explain the pollutant '{pollutant}'. "
-            "Respond strictly in this JSON format:\n\n"
-            "{\n"
-            f'  "object": "What is {pollutant}?",\n'
-            '  "causes": ["Cause 1", "Cause 2", "Cause 3"],\n'
-            '  "effects": ["Effect 1", "Effect 2", "Effect 3"]\n'
-            "}\n"
-            "Do not include any extra text or explanation outside the JSON."
-        )
-        result = ask_groq(prompt)
-        return result
-
-
-    def predict_policy(self, policy: str, location: str, pm25: float, pm10: float, no2: float, co: float, o3: float):
-        aqi = calc(pm25, pm10, no2, co, o3)
-        prompt = f"""
-    You are Clarity, an AI model that predicts the outcome of pollution-control policies.
-
-    Inputs:
-    - Policy: {policy}
-    - Location: {location}
-    - Current AQI: {aqi}
-    - Pollutant measures: PM2.5={pm25}, PM10={pm10}, NO2={no2}, CO={co}, O3={o3}
-
-    Return ONLY the following JSON object:
-    {{
-    "effects_of_policy": ["Effect 1", "Effect 2", "Effect 3"],
-    "efficiency_ratio": 0.0,
-    "old_aqi": {aqi},
-    "new_aqi": 0.0
-    }}
-    Do not include any other explanation.
-    """
-        result = ask_groq(prompt)
-        return result
+        except (KeyError, TypeError, ValueError) as error:
+            return {"error": f"Invalid pollution-data structure: {error}"}
+        except Exception as error:
+            return {"error": f"Failed to generate citizen actions: {error}"}
 
 
     def compare_locations(self, location1: str, location2: str, pm25_1: float, pm10_1: float, pm25_2: float, pm10_2: float):
@@ -666,7 +879,7 @@ class ResponseService:
     Give 2-line difference summary.
     Return as {{"comparison": "..."}}
     """
-        return ask_groq(prompt)
+        return ask_gemini(prompt)
 
 
     def health_risks(self, pm25: float, pm10: float, no2: float, co: float, o3: float):
@@ -682,7 +895,7 @@ class ResponseService:
     "elderly": "..."
     }}
     """
-        return ask_groq(prompt)
+        return ask_gemini(prompt)
 
 
 
@@ -704,7 +917,7 @@ class ResponseService:
     Respond only with a JSON array:
     ["Policy 1", "Policy 2", "Policy 3"]
     """
-        return ask_groq(prompt) if not debug_policy_suggestions else ["Plant trees", "Ban diesel", "Promote cycling"]
+        return ask_gemini(prompt) if not debug_policy_suggestions else ["Plant trees", "Ban diesel", "Promote cycling"]
 
 
     def citizen_actions(self, pm25: float, pm10: float, no2: float, co: float, o3: float):
@@ -729,7 +942,7 @@ class ResponseService:
     \"Action 5\"
     ]
     """
-        return ask_groq(prompt)
+        return ask_gemini(prompt)
 
 
     def daily_tip(self):
@@ -743,7 +956,7 @@ class ResponseService:
 
     Respond as plain text.
     """
-        result = ask_groq(prompt)
+        result = ask_gemini(prompt)
         return {"tip": result if isinstance(result, str) else str(result)}
 
 
@@ -761,7 +974,7 @@ class ResponseService:
     "explanation": "..."
     }}
     """
-        return ask_groq(prompt)
+        return ask_gemini(prompt)
 
 
     def reduce_pollution_plan(self, goal: str, location: str):
@@ -780,23 +993,24 @@ class ResponseService:
     "plan": ["Step 1", "Step 2", "Step 3"]
     }}
     """
-        return ask_groq(prompt)
-    
-    def get_health_impact(self):
+        return ask_gemini(prompt)
+
+    def get_health_impact(self, lat: float, lon: float):
+
         """Analyze health impact based on current pollution data"""
         try:
             # Get current pollution data
-            location_data = self.get_location()
+            location_data = self.get_location(lat, lon)
             if not location_data or 'error' in location_data:
                 return {
                     "error": "Failed to fetch pollution data",
                     "details": location_data.get('error', 'Unknown error')
                 }
-            
+
             # Check if data structure is valid
             if 'data' not in location_data or 'pollution' not in location_data['data']:
                 return {"error": "Invalid data structure from API"}
-            
+
             # Extract pollutant values
             pollution = location_data['data']['pollution']
             pm25 = pollution.get('pm25')
@@ -804,7 +1018,7 @@ class ResponseService:
             no2 = pollution.get('no2')
             co = pollution.get('co')
             o3 = pollution.get('o3')
-            
+
             # Validate values
             if None in [pm25, pm10, no2, co, o3]:
                 missing = [k for k, v in {
@@ -818,14 +1032,14 @@ class ResponseService:
                     "error": "Missing pollution data",
                     "missing_values": missing
                 }
-            
+
             # Calculate AQI
             aqi = self._calculate_aqi(pm25, pm10, no2, co, o3)
             if aqi is None:
                 return {"error": "Failed to calculate AQI"}
-            
+
             aqi_status = self._get_aqi_status(aqi)
-            
+
             # Prepare health impact analysis
             result = {
                 "risk_level": self._get_risk_level(aqi),
@@ -844,9 +1058,9 @@ class ResponseService:
                 },
                 "timestamp": datetime.now().isoformat()
             }
-            
+
             return result
-            
+
         except Exception as e:
             return {
                 "error": "Internal server error",
@@ -883,6 +1097,69 @@ class ResponseService:
         elif aqi <= 150: return "Sensitive groups should reduce prolonged outdoor exertion"
         elif aqi <= 200: return "Everyone should reduce prolonged outdoor exertion. Sensitive groups should stay indoors."
         else: return "Stay indoors with windows closed. Use air purifiers if available"
+    def help_info(self) -> dict[str, str]:
+            return {
+                "help": (
+                    "Clarity explains pollution data and health risks, suggests "
+                    "actions, predicts policy impacts, and creates scenarios."
+                )
+            }
 
+
+    def explain_pollution(self, pollutant: str) -> Any:
+            prompt = f"""
+        Explain the pollutant "{pollutant}" in simple words.
+
+        Return only valid JSON:
+        {{
+          "object": "What is {pollutant}?",
+          "causes": ["Cause 1", "Cause 2", "Cause 3"],
+          "effects": ["Effect 1", "Effect 2", "Effect 3"]
+        }}
+        """
+
+            return ask_gemini(prompt)
+
+
+    def predict_policy(
+            self,
+            policy: str,
+            location: str,
+            pm25: float,
+            pm10: float,
+            no2: float,
+            co: float,
+            o3: float,
+        ) -> Any:
+            current_aqi = calc(pm25, pm10, no2, co, o3)
+
+            prompt = f"""
+        You are Clarity, an AI assistant for pollution-policy analysis.
+
+        Policy: {policy}
+        Location: {location}
+        Current AQI: {current_aqi}
+
+        Current pollutant levels:
+        - PM2.5: {pm25}
+        - PM10: {pm10}
+        - NO2: {no2}
+        - CO: {co}
+        - O3: {o3}
+
+        Estimate the likely impact of the policy.
+
+        Return only valid JSON:
+        {{
+          "effects_of_policy": ["Effect 1", "Effect 2", "Effect 3"],
+          "old_aqi": {current_aqi},
+          "new_aqi": 0,
+          "aqi_improvement_percent": 0,
+          "health_benefits": "low or high",
+          "timeline_months": 0
+        }}
+        """
+
+            return ask_gemini(prompt)
 
 response_service = ResponseService()
