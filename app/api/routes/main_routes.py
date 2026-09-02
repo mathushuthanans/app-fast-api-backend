@@ -10,6 +10,7 @@ from app.services.response_service import response_service
 
 
 
+
 app = FastAPI()
 # Explicitly allow the origin where your HTML is served
 app.add_middleware(
@@ -67,8 +68,8 @@ def predict_region_class(data: RegionClassRequest):
     return response_service.predict_region_class(data)
 
 @router.get("/bridge_predict")
-def bridge_predict(asthma: int = 0, heart_disease: int = 0):
-    return response_service.bridge_predict(asthma, heart_disease)
+def bridge_predict(lat: float, lon: float, asthma: int = 0, heart_disease: int = 0):
+    return response_service.bridge_predict(lat, lon, asthma, heart_disease)
 
 
 
